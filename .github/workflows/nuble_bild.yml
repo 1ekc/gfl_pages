@@ -14,15 +14,12 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. Установка зависимостей
+      # 1. Установка зависимостей (без изменений)
       - name: Setup environment
         shell: powershell
         run: |
-          # Установка ПО
           choco install git -y
           choco install git-lfs -y
-          
-          # Настройка Git
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
           git config --global init.defaultBranch main
@@ -30,7 +27,7 @@ jobs:
           git config --global http.postBuffer 524288000
           git config --global core.compression 0
 
-      # 2. Подготовка рабочей директории
+      # 2. Подготовка рабочей директории (без изменений)
       - name: Prepare workspace
         shell: powershell
         run: |
@@ -41,7 +38,7 @@ jobs:
           git lfs install --skip-repo
           git remote add origin "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git"
 
-      # 3. Загрузка bundle
+      # 3. Загрузка bundle (без изменений)
       - name: Download bundle parts
         working-directory: ./workspace
         shell: powershell
@@ -51,7 +48,7 @@ jobs:
           Remove-Item repo.part.* -Force
           Write-Host "Bundle created: $((Get-Item $env:BUNDLE_NAME).Length/1MB) MB"
 
-      # 4. Верификация bundle
+      # 4. Верификация bundle (без изменений)
       - name: Verify bundle
         working-directory: ./workspace
         shell: powershell
@@ -64,7 +61,7 @@ jobs:
           git bundle verify $env:BUNDLE_NAME | Out-Host
           git bundle list-heads $env:BUNDLE_NAME | Out-Host
 
-      # 5. Импорт репозитория
+      # 5. Импорт репозитория (ИСПРАВЛЕННАЯ ВЕРСИЯ)
       - name: Import repository
         working-directory: ./workspace
         shell: powershell
@@ -77,15 +74,22 @@ jobs:
           # Импортируем bundle
           git bundle unbundle "../$env:BUNDLE_NAME" | Out-Null
           
-          # Создаем ветки из bundle
+          # Создаем ветки и теги из bundle (ИСПРАВЛЕННЫЙ БЛОК)
           git bundle list-heads "../$env:BUNDLE_NAME" | ForEach-Object {
-            $ref = $_.Split()[1]
-            $hash = $_.Split()[0]
+            $parts = $_ -split '\s+'
+            $hash = $parts[0]
+            $ref = $parts[1]
+            
             if ($ref -match "refs/heads/") {
+              $branch = $ref -replace "refs/heads/",""
               git update-ref $ref $hash
+              Write-Host "Created branch: $branch ($hash)"
             }
+            
             if ($ref -match "refs/tags/") {
-              git tag -f $(($ref -replace "refs/tags/","") $hash
+              $tag = $ref -replace "refs/tags/",""
+              git tag -f $tag $hash
+              Write-Host "Created tag: $tag ($hash)"
             }
           }
           
@@ -111,7 +115,7 @@ jobs:
           Remove-Item -Recurse -Force workspace/temp_repo
           Remove-Item -Recurse -Force workspace/imported_repo
 
-      # 6. Верификация результата
+      # 6. Верификация результата (без изменений)
       - name: Verify deployment
         shell: powershell
         run: |
