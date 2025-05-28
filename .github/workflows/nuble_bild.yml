@@ -1,4 +1,4 @@
-name: Deploy Massive Bundle with LFS (Final Fix)
+name: Deploy Massive Bundle with LFS (Final Solution)
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
 env:
   BUNDLE_NAME: full.bundle
   RELEASE_TAG: v1.0
+  LFS_SKIP_SMUDGE: 1  # Пропускаем первоначальную загрузку LFS
 
 jobs:
   unpack:
@@ -24,6 +25,7 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global init.defaultBranch main
           git config --system core.longpaths true
+          git config --global http.postBuffer 524288000
 
       # 2. Подготовка окружения
       - name: Setup environment
@@ -33,7 +35,7 @@ jobs:
           mkdir workspace
           cd workspace
           git init
-          git remote add origin "https://$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
+          git remote add origin "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
 
       # 3. Загрузка и сборка bundle
       - name: Download and combine bundle
@@ -54,42 +56,37 @@ jobs:
             throw "Invalid bundle format"
           }
           git bundle verify $env:BUNDLE_NAME
-          git bundle list-heads $env:BUNDLE_NAME
 
-      # 5. Импорт данных (полностью переработанный)
+      # 5. Импорт данных (с улучшенной обработкой LFS)
       - name: Import repository data
         working-directory: ./workspace
         shell: powershell
         run: |
-          # Создаем bare-репозиторий для импорта
-          mkdir temp_unpack
-          cd temp_unpack
-          git init --bare
-          
-          # Импортируем все данные из bundle
+          # Импорт без LFS объектов
           git fetch "../$env:BUNDLE_NAME" "+refs/*:refs/*" --prune
           
-          # Клонируем из временного репозитория в основной
-          cd ..
-          git clone ./temp_unpack imported_repo
-          cd imported_repo
+          # Создаем основную ветку
+          git checkout -b main FETCH_HEAD
           
-          # Настраиваем origin и пушим
-          git remote set-url origin "https://$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
-          git push --all origin --force
-          git push --tags origin --force
+          # Настраиваем LFS
+          git lfs install --local
+          git config --local lfs.url "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git/info/lfs"
           
-          # Очистка
-          cd ..
-          Remove-Item -Recurse -Force temp_unpack
-          Remove-Item -Recurse -Force imported_repo
+          # Пушим сначала без LFS
+          git push origin main --force
+          git push origin --tags --force
+          
+          # Затем загружаем LFS объекты
+          git lfs fetch --all
+          git lfs checkout
+          git lfs push --all origin
 
       # 6. Проверка результата
       - name: Verify result
         shell: powershell
         run: |
-          git clone "https://github.com/${{ github.repository }}.git" test_clone
+          git clone "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git" test_clone
           cd test_clone
+          git lfs pull
           git log -n 1 --oneline
-          git branch -avv
           git lfs ls-files
