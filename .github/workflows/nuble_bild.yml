@@ -1,0 +1,92 @@
+name: Deploy Massive Bundle with LFS (Fixed Version)
+
+on:
+  workflow_dispatch:
+
+env:
+  BUNDLE_NAME: full.bundle
+  RELEASE_TAG: v1.0
+
+jobs:
+  unpack:
+    runs-on: self-hosted
+    timeout-minutes: 600
+
+    steps:
+      # 1. Установка зависимостей
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          choco install git -y
+          choco install git-lfs -y
+          git lfs install --skip-repo
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git config --global init.defaultBranch main
+          git config --system core.longpaths true
+
+      # 2. Подготовка окружения
+      - name: Setup environment
+        shell: powershell
+        run: |
+          Remove-Item -Recurse -Force workspace -ErrorAction SilentlyContinue
+          mkdir workspace
+          cd workspace
+          git init
+          git remote add origin "https://$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
+
+      # 3. Загрузка и сборка bundle
+      - name: Download and combine bundle
+        working-directory: ./workspace
+        shell: powershell
+        run: |
+          gh release download $env:RELEASE_TAG -p "repo.part.*" --clobber
+          cmd /c "copy /b repo.part.* $env:BUNDLE_NAME"
+          Remove-Item repo.part.*
+
+      # 4. Проверка bundle
+      - name: Verify bundle
+        working-directory: ./workspace
+        shell: powershell
+        run: |
+          $header = Get-Content $env:BUNDLE_NAME -TotalCount 1
+          if (-not ($header -match "^# v2 git bundle$")) {
+            throw "Invalid bundle format"
+          }
+          git bundle verify $env:BUNDLE_NAME
+
+      # 5. Импорт данных (исправленная версия)
+      - name: Import repository data
+        working-directory: ./workspace
+        shell: powershell
+        run: |
+          # Создаем временный репозиторий
+          mkdir temp_unpack
+          cd temp_unpack
+          git init --bare
+          
+          # Импортируем данные из bundle
+          git fetch "../$env:BUNDLE_NAME" +refs/*:refs/* --prune
+          
+          # Переносим в основной репозиторий
+          cd ..
+          git fetch ./temp_unpack +refs/*:refs/* --prune
+          
+          # Создаем начальную ветку
+          git checkout -b main
+          git reset --hard FETCH_HEAD
+          
+          # Пушим изменения
+          git push --all origin --force
+          git push --tags origin --force
+          
+          # Очистка
+          Remove-Item -Recurse -Force temp_unpack
+
+      # 6. Финализация
+      - name: Final status check
+        shell: powershell
+        run: |
+          git log -n 1 --oneline
+          git branch -avv
+          git lfs ls-files
