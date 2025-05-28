@@ -1,4 +1,4 @@
-name: Deploy Massive Bundle with LFS (Final Solution)
+name: Deploy Massive Bundle with LFS (Final Working Version)
 
 on:
   workflow_dispatch:
@@ -6,87 +6,120 @@ on:
 env:
   BUNDLE_NAME: full.bundle
   RELEASE_TAG: v1.0
-  LFS_SKIP_SMUDGE: 1  # Пропускаем первоначальную загрузку LFS
+  GIT_LFS_SKIP_SMUDGE: 1
 
 jobs:
-  unpack:
+  deploy:
     runs-on: self-hosted
-    timeout-minutes: 600
+    timeout-minutes: 120
 
     steps:
       # 1. Установка зависимостей
-      - name: Install dependencies
+      - name: Setup environment
         shell: powershell
         run: |
+          # Установка ПО
           choco install git -y
           choco install git-lfs -y
-          git lfs install --skip-repo
+          
+          # Настройка Git
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
           git config --global init.defaultBranch main
           git config --system core.longpaths true
           git config --global http.postBuffer 524288000
+          git config --global core.compression 0
 
-      # 2. Подготовка окружения
-      - name: Setup environment
+      # 2. Подготовка рабочей директории
+      - name: Prepare workspace
         shell: powershell
         run: |
           Remove-Item -Recurse -Force workspace -ErrorAction SilentlyContinue
           mkdir workspace
           cd workspace
           git init
-          git remote add origin "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
+          git lfs install --skip-repo
+          git remote add origin "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git"
 
-      # 3. Загрузка и сборка bundle
-      - name: Download and combine bundle
+      # 3. Загрузка bundle
+      - name: Download bundle parts
         working-directory: ./workspace
         shell: powershell
         run: |
           gh release download $env:RELEASE_TAG -p "repo.part.*" --clobber
           cmd /c "copy /b repo.part.* $env:BUNDLE_NAME"
-          Remove-Item repo.part.*
+          Remove-Item repo.part.* -Force
+          Write-Host "Bundle created: $((Get-Item $env:BUNDLE_NAME).Length/1MB) MB"
 
-      # 4. Проверка bundle
+      # 4. Верификация bundle
       - name: Verify bundle
         working-directory: ./workspace
         shell: powershell
         run: |
+          if (-not (Test-Path $env:BUNDLE_NAME)) { throw "Bundle file not found" }
           $header = Get-Content $env:BUNDLE_NAME -TotalCount 1
-          if (-not ($header -match "^# v2 git bundle$")) {
-            throw "Invalid bundle format"
-          }
-          git bundle verify $env:BUNDLE_NAME
+          if (-not ($header -match "^# v2 git bundle$")) { throw "Invalid bundle format" }
+          
+          Write-Host "Bundle contents:"
+          git bundle verify $env:BUNDLE_NAME | Out-Host
+          git bundle list-heads $env:BUNDLE_NAME | Out-Host
 
-      # 5. Импорт данных (с улучшенной обработкой LFS)
-      - name: Import repository data
+      # 5. Импорт репозитория
+      - name: Import repository
         working-directory: ./workspace
         shell: powershell
         run: |
-          # Импорт без LFS объектов
-          git fetch "../$env:BUNDLE_NAME" "+refs/*:refs/*" --prune
+          # Создаем временный bare-репозиторий
+          mkdir temp_repo
+          cd temp_repo
+          git init --bare
           
-          # Создаем основную ветку
-          git checkout -b main FETCH_HEAD
+          # Импортируем bundle
+          git bundle unbundle "../$env:BUNDLE_NAME" | Out-Null
+          
+          # Создаем ветки из bundle
+          git bundle list-heads "../$env:BUNDLE_NAME" | ForEach-Object {
+            $ref = $_.Split()[1]
+            $hash = $_.Split()[0]
+            if ($ref -match "refs/heads/") {
+              git update-ref $ref $hash
+            }
+            if ($ref -match "refs/tags/") {
+              git tag -f $(($ref -replace "refs/tags/","") $hash
+            }
+          }
+          
+          # Клонируем из временного репозитория
+          cd ..
+          git clone temp_repo imported_repo
+          cd imported_repo
           
           # Настраиваем LFS
           git lfs install --local
-          git config --local lfs.url "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git/info/lfs"
+          git config --local lfs.url "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git/info/lfs"
           
-          # Пушим сначала без LFS
-          git push origin main --force
+          # Пушим данные
+          git push origin --all --force
           git push origin --tags --force
           
-          # Затем загружаем LFS объекты
+          # Загружаем LFS объекты
           git lfs fetch --all
-          git lfs checkout
           git lfs push --all origin
+          
+          # Очистка
+          cd ../..
+          Remove-Item -Recurse -Force workspace/temp_repo
+          Remove-Item -Recurse -Force workspace/imported_repo
 
-      # 6. Проверка результата
-      - name: Verify result
+      # 6. Верификация результата
+      - name: Verify deployment
         shell: powershell
         run: |
-          git clone "https://x-access-token:$($env:GH_TOKEN)@github.com/${{ github.repository }}.git" test_clone
-          cd test_clone
+          mkdir verification
+          cd verification
+          git clone "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git"
+          cd *
           git lfs pull
-          git log -n 1 --oneline
+          git log --oneline -n 3
           git lfs ls-files
+          Write-Host "Deployment verified successfully"
