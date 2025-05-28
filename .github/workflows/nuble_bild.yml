@@ -1,4 +1,4 @@
-name: Deploy Massive Bundle with LFS (Fixed Version)
+name: Deploy Massive Bundle with LFS (Final Fix)
 
 on:
   workflow_dispatch:
@@ -54,39 +54,42 @@ jobs:
             throw "Invalid bundle format"
           }
           git bundle verify $env:BUNDLE_NAME
+          git bundle list-heads $env:BUNDLE_NAME
 
-      # 5. Импорт данных (исправленная версия)
+      # 5. Импорт данных (полностью переработанный)
       - name: Import repository data
         working-directory: ./workspace
         shell: powershell
         run: |
-          # Создаем временный репозиторий
+          # Создаем bare-репозиторий для импорта
           mkdir temp_unpack
           cd temp_unpack
           git init --bare
           
-          # Импортируем данные из bundle
-          git fetch "../$env:BUNDLE_NAME" +refs/*:refs/* --prune
+          # Импортируем все данные из bundle
+          git fetch "../$env:BUNDLE_NAME" "+refs/*:refs/*" --prune
           
-          # Переносим в основной репозиторий
+          # Клонируем из временного репозитория в основной
           cd ..
-          git fetch ./temp_unpack +refs/*:refs/* --prune
+          git clone ./temp_unpack imported_repo
+          cd imported_repo
           
-          # Создаем начальную ветку
-          git checkout -b main
-          git reset --hard FETCH_HEAD
-          
-          # Пушим изменения
+          # Настраиваем origin и пушим
+          git remote set-url origin "https://$($env:GH_TOKEN)@github.com/${{ github.repository }}.git"
           git push --all origin --force
           git push --tags origin --force
           
           # Очистка
+          cd ..
           Remove-Item -Recurse -Force temp_unpack
+          Remove-Item -Recurse -Force imported_repo
 
-      # 6. Финализация
-      - name: Final status check
+      # 6. Проверка результата
+      - name: Verify result
         shell: powershell
         run: |
+          git clone "https://github.com/${{ github.repository }}.git" test_clone
+          cd test_clone
           git log -n 1 --oneline
           git branch -avv
           git lfs ls-files
