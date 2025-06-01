@@ -1,0 +1,15 @@
+# Игнорировать ВСЁ по умолчанию
+/*
+
+# Разрешить только нужные файлы/папки
+!/.gitignore
+!/.github/workflows/deploy-cloudflare.yml
+
+!/src/
+!/src/**/*  # Разрешить всё внутри src/
+!/public/
+!/public/**/*  # Разрешить всё внутри public/
+
+!/package.json
+!/pnpm-lock.yaml
+!/vite.config.ts
